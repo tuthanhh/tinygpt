@@ -1,50 +1,54 @@
-# CS336 Spring 2025 Assignment 1: Basics
+# tinygpt
 
-For a full description of the assignment, see the assignment handout at
-[cs336_assignment1_basics.pdf](./cs336_assignment1_basics.pdf)
+A small GPT-style language model written from scratch in PyTorch and trained on Vietnamese Wikipedia.
 
-If you see any issues with the assignment handout or code, please feel free to
-raise a GitHub issue or open a pull request with a fix.
+This project builds on **Assignment 1 (Basics) of Stanford CS336: Language Modeling from Scratch**
+([course site](https://cs336.stanford.edu), [assignment repo](https://github.com/stanford-cs336/assignment1-basics)).
+It follows the assignment handout's architecture and uses its unit tests. It is a personal learning project and is not
+affiliated with Stanford.
+
+## What's inside
+
+- **Data**: [hchautran/vietnamese-wiki](https://huggingface.co/datasets/hchautran/vietnamese-wiki) on Hugging Face.
+  The last ~5% of documents are held out for validation.
+
+- **Model**: decoder-only Transformer with pre-norm RMSNorm, SwiGLU, RoPE, and causal multi-head attention, without
+  bias terms. Default size: `d_model=256`, 4 layers, 4 heads, context 256, about 3.2M parameters.
+- **Tokenizer**: byte-level, with a vocabulary of 257 (256 bytes plus one separator token). BPE comes later.
+- **Training**: SGD to validate the loop, then AdamW with linear warmup, cosine decay, and gradient clipping. Each run
+  has one config and one folder under `runs/` holding its metrics CSV, samples, and checkpoints.
+- **Generation**: temperature and top-p sampling from a saved checkpoint, run from the command line.
+
+## Layout
+
+```
+src/tinygpt/       model, tokenizer, data, training, and generation modules
+scripts/           thin entry points: prepare data, train, generate
+tests/             CS336 unit tests; tests/adapters.py connects them to this code
+runs/              one folder per training run
+data/              datasets (not committed)
+```
 
 ## Setup
 
-### Environment
-We manage our environments with `uv` to ensure reproducibility, portability, and ease of use.
-Install `uv` [here](https://github.com/astral-sh/uv#installation) (recommended), or run `pip install uv`/`brew install uv`.
-We recommend reading a bit about managing projects in `uv` [here](https://docs.astral.sh/uv/guides/projects/#managing-dependencies) (you will not regret it!).
-
-You can now run any code in the repo using
-```sh
-uv run <python_file_path>
-```
-and the environment will be automatically solved and activated when necessary.
-
-### Run unit tests
-
+The project uses [`uv`](https://docs.astral.sh/uv/).
 
 ```sh
-uv run pytest
+uv run pytest            # run the unit tests
 ```
 
-Initially, all tests should fail with `NotImplementedError`s.
-To connect your implementation to the tests, complete the
-functions in [./tests/adapters.py](./tests/adapters.py).
+Download the [Vietnamese Wikipedia dataset](https://huggingface.co/datasets/hchautran/vietnamese-wiki) into
+`data/vi_raw/`. Then run `prepare_vi.py` to convert it to the plain-text format the training code expects: documents
+separated by `<|endoftext|>`, with the last 5% held out for validation.
 
-### Download data
-Download the TinyStories data and a subsample of OpenWebText
-
-``` sh
-mkdir -p data
-cd data
-
-wget https://huggingface.co/datasets/roneneldan/TinyStories/resolve/main/TinyStoriesV2-GPT4-train.txt
-wget https://huggingface.co/datasets/roneneldan/TinyStories/resolve/main/TinyStoriesV2-GPT4-valid.txt
-
-wget https://huggingface.co/datasets/stanford-cs336/owt-sample/resolve/main/owt_train.txt.gz
-gunzip owt_train.txt.gz
-wget https://huggingface.co/datasets/stanford-cs336/owt-sample/resolve/main/owt_valid.txt.gz
-gunzip owt_valid.txt.gz
-
-cd ..
+```sh
+uv run python scripts/prepare_vi.py data/vi_raw/*.parquet --text-column <text column>
 ```
 
+This writes `data/vi_train.txt` and `data/vi_valid.txt` (about 100 MB of training text by default; change with
+`--train-mb`). Add `--strip-accents` to remove Vietnamese diacritics; the output files are then named `vi_noaccent_*`.
+
+## Acknowledgements
+
+The tests, adapter interface, and model specification come from the
+[CS336 Assignment 1 starter code](https://github.com/stanford-cs336/assignment1-basics) by the Stanford CS336 staff.

@@ -16,6 +16,10 @@ class ByteTokenizer:
             ids.extend(piece.encode("utf-8"))
         return ids
 
+    def token_bytes(self, token_id: int) -> bytes:
+        """Raw bytes of one token, for streaming decode in the CLI."""
+        return EOT_TOKEN.encode("utf-8") if token_id == self.eot_id else bytes([token_id])
+
     def decode(self, ids: list[int]) -> str:
 
         eot_bytes = EOT_TOKEN.encode("utf-8")

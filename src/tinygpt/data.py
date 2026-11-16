@@ -50,9 +50,10 @@ def load_tokens(
     """Tokens for a text file, cached as .npy so later runs skip encoding."""
 
     size_tag = "full" if max_bytes is None else f"{max_bytes // 1_000_000}MB"
-    cache_path = (
-        Path(cache_dir) / f"{Path(txt_path).stem}_{tokenizer.name}_{size_tag}.npy" if cache_dir is not None else None
-    )
+    # Folder + stem: prepare_vi.py names every corpus vi_train.txt, so the stem alone collides.
+    txt_path = Path(txt_path)
+    data_tag = f"{txt_path.parent.name}_{txt_path.stem}"
+    cache_path = Path(cache_dir) / f"{data_tag}_{tokenizer.name}_{size_tag}.npy" if cache_dir is not None else None
 
     if cache_path is not None and Path(cache_path).exists():
         return np.load(cache_path, mmap_mode="r")

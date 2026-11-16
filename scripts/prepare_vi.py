@@ -48,7 +48,7 @@ def strip_accents(text: str) -> str:
 def clean(text: str, min_chars: int, no_accents: bool) -> str | None:
     """Cleaned document, or None if it should be dropped."""
     text = unicodedata.normalize("NFC", text)  # one byte form per accented letter
-    text = text.replace(EOT, " ")              # a stray separator would split the document
+    text = text.replace(EOT, " ")  # a stray separator would split the document
     text = text.strip()
     if no_accents:
         text = strip_accents(text)

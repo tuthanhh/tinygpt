@@ -1,6 +1,8 @@
 import csv
+import json
 import math
 import time
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -10,8 +12,8 @@ from tinygpt.checkpoint import save_checkpoint
 from tinygpt.data import get_batch, load_tokens
 from tinygpt.losses import cross_entropy
 from tinygpt.model import TransformerLM
-from tinygpt.optim import SGD
-from tinygpt.tokenizer.byte import ByteTokenizer
+from tinygpt.optim import SGD, AdamW, gradient_clipping, learning_rate_schedule
+from tinygpt.tokenizer import load_tokenizer
 
 
 def pick_device() -> torch.device:
@@ -40,6 +42,7 @@ def train(
     val_path: str,
     train_max_bytes: int | None,
     cache_dir: str | None = "data/cache",
+    tokenizer_spec: str = "byte",  # "byte" or a folder from scripts/train_bpe.py
     # model
     context_length: int,
     d_model: int,
@@ -50,8 +53,16 @@ def train(
     # optimization
     batch_size: int,
     max_steps: int,
-    lr: float,
-    # logging / eval
+    optimizer_name: str = "adamw",  # "adamw" or "sgd"
+    max_lr: float = 3e-3,
+    min_lr: float = 3e-4,
+    warmup_iters: int = 200,
+    cosine_cycle_iters: int | None = None,  # None -> max_steps: reach min_lr at the end
+    betas: tuple[float, float] = (0.9, 0.999),
+    eps: float = 1e-8,
+    weight_decay: float = 0.1,
+    max_grad_norm: float = 1.0,
+    # logging / eval / checkpoints
     log_every: int = 10,
     eval_every: int = 200,
     eval_batches: int = 20,
@@ -64,10 +75,12 @@ def train(
     device: str | torch.device | None = None,
 ) -> dict:
     # ---------------------------------------------------------------- 1. setup
-
     device = torch.device(device) if device is not None else pick_device()
-    tokenizer = ByteTokenizer()
+    if cosine_cycle_iters is None:
+        cosine_cycle_iters = max_steps
+    assert cosine_cycle_iters > warmup_iters, "cosine phase needs at least one step"
 
+    tokenizer = load_tokenizer(tokenizer_spec)
     train_tokens = load_tokens(train_path, tokenizer, max_bytes=train_max_bytes, cache_dir=cache_dir)
     val_tokens = load_tokens(val_path, tokenizer, max_bytes=None, cache_dir=cache_dir)
 
@@ -79,6 +92,7 @@ def train(
     # Training seed: model init (torch) and batch sampling (numpy).
     torch.manual_seed(seed)
     np.random.seed(seed)
+
     model_config = {
         "vocab_size": tokenizer.vocab_size,
         "context_length": context_length,
@@ -88,76 +102,142 @@ def train(
         "d_ff": d_ff,
         "rope_theta": rope_theta,
     }
-    ckpt_config = {**model_config, "tokenizer": tokenizer.name}
-
     model = TransformerLM(**model_config, device=device)
     model.train()
-    optimizer = SGD(model.parameters(), lr=lr)
+
+    # The lr passed here is only the starting value; the schedule overwrites it every step.
+    if optimizer_name == "adamw":
+        optimizer = AdamW(model.parameters(), lr=max_lr, betas=betas, eps=eps, weight_decay=weight_decay)
+    elif optimizer_name == "sgd":
+        optimizer = SGD(model.parameters(), lr=max_lr)
+    else:
+        raise ValueError(f"unknown optimizer {optimizer_name!r} (use 'adamw' or 'sgd')")
+
+    def lr_at(step: int) -> float:
+        return learning_rate_schedule(step, max_lr, min_lr, warmup_iters, cosine_cycle_iters)
 
     n_params = sum(p.numel() for p in model.parameters())
     print(
-        f"device={device}  params={n_params:,}  train_tokens={len(train_tokens):,}  "
-        f"val_tokens={len(val_tokens):,}  expected step-0 loss≈ln({tokenizer.vocab_size})"
-        f"={math.log(tokenizer.vocab_size):.3f}"
+        f"device={device}  params={n_params:,}  optimizer={optimizer_name}  "
+        f"train_tokens={len(train_tokens):,}  val_tokens={len(val_tokens):,}  "
+        f"expected step-0 loss≈ln({tokenizer.vocab_size})={math.log(tokenizer.vocab_size):.3f}"
     )
 
+    # Everything needed to tell runs apart (and rerun one), in one dict. Plain
+    # JSON types only, so it survives both json.dump and torch.load(weights_only=True).
+    run_config = {
+        "started_at": datetime.now().isoformat(timespec="seconds"),
+        "device": str(device),
+        "params": n_params,
+        "data": {
+            "train_path": train_path,
+            "val_path": val_path,
+            "tokenizer": tokenizer.name,
+            "train_max_bytes": train_max_bytes,
+            "train_tokens": len(train_tokens),
+            "val_tokens": len(val_tokens),
+        },
+        "optim": {
+            "optimizer": optimizer_name,
+            "max_lr": max_lr,
+            "min_lr": min_lr,
+            "warmup_iters": warmup_iters,
+            "cosine_cycle_iters": cosine_cycle_iters,  # resolved value, not None
+            "betas": list(betas),
+            "eps": eps,
+            "weight_decay": weight_decay,
+            "max_grad_norm": max_grad_norm,
+            "batch_size": batch_size,
+            "max_steps": max_steps,
+        },
+        "seed": seed,
+        "eval_seed": eval_seed,
+        "eval_batches": eval_batches,
+        "overfit_one_batch": overfit_one_batch,
+    }
+    # Model keys stay top-level so the CLI can still build TransformerLM(**config)
+    # after popping "tokenizer" and "run".
+    # "tokenizer" holds the spec, not the name: it is what load_tokenizer needs to rebuild it.
+    ckpt_config = {**model_config, "tokenizer": tokenizer_spec, "run": run_config}
+
     fixed_batch = get_batch(train_tokens, batch_size, context_length, device) if overfit_one_batch else None
-    Path(run_dir).mkdir(parents=True, exist_ok=True)
-    log_file = open(f"{run_dir}/train_log.csv", "w", newline="")
+    run_path = Path(run_dir)
+    run_path.mkdir(parents=True, exist_ok=True)
+    with open(run_path / "config.json", "w", encoding="utf-8") as f:
+        json.dump(ckpt_config, f, indent=2)  # same dict as every checkpoint carries
+    log_file = open(run_path / "train_log.csv", "w", newline="")
     writer = csv.writer(log_file)
-    writer.writerow(["step", "train_loss", "val_loss", "lr", "elapsed_s", "tokens_seen"])
+    writer.writerow(["step", "train_loss", "val_loss", "lr", "grad_norm", "elapsed_s", "tokens_seen"])
 
     tokens_per_step = batch_size * context_length
     start = time.perf_counter()
     train_loss = float("nan")
     val_loss = float("nan")
+    elapsed = 0.0
+    seen = 0
 
     # ---------------------------------------------------------------- 2. loop
+    # Everything logged for `step` describes the weights after `step` updates:
+    # val loss, train loss (forward pass before this step's update), and the lr
+    # and grad norm used for this step's update.
     try:
         for step in range(max_steps):
+            # lr for THIS step, set before anything reads it, on every param group.
+            lr_now = lr_at(step)
+            for group in optimizer.param_groups:
+                group["lr"] = lr_now
+
+            do_log = step % log_every == 0
+            do_eval = step % eval_every == 0
+            do_save = step > 0 and step % ckpt_every == 0  # step 0 = untrained, not worth a file
+
+            if do_eval:
+                val_loss = evaluate(model, val_batch_list)
+            if do_save:
+                save_checkpoint(model, optimizer, step, run_path / f"ckpt_{step}.pt", ckpt_config)
+
             x, y = (
                 fixed_batch if fixed_batch is not None else get_batch(train_tokens, batch_size, context_length, device)
             )
-
             logits = model(x)  # (B, L, V)
             loss = cross_entropy(logits, y)
 
-            # ---- 3/4. logging and validation, on the loss BEFORE this step's
-            # update, so step 0 shows the untrained model (gate: ≈ ln V).
-            do_log = step % log_every == 0
-            do_eval = step % eval_every == 0
-            do_save = step % ckpt_every == 0
+            optimizer.zero_grad()  # gradients accumulate: clear first
+            loss.backward()
+            grad_norm = gradient_clipping(model.parameters(), max_grad_norm)  # norm BEFORE clipping
+            optimizer.step()
+
+            # ---- 3/4. logging. .item() syncs with the GPU, so only on log steps.
             if do_log or do_eval:
-                train_loss = loss.item()  # syncs with the GPU: only on log steps
-                val_str = ""
-                if do_eval:
-                    val_loss = evaluate(model, val_batch_list)
-                    val_str = f"{val_loss:.4f}"
+                train_loss = loss.item()  # still the pre-update loss: step 0 ≈ untrained
+                gn = float(grad_norm)
+                val_str = f"{val_loss:.4f}" if do_eval else ""
                 elapsed = time.perf_counter() - start
-                lr_now = optimizer.param_groups[0]["lr"]
                 seen = step * tokens_per_step
-                writer.writerow([step, f"{train_loss:.4f}", val_str, lr_now, f"{elapsed:.1f}", seen])
+                writer.writerow(
+                    [step, f"{train_loss:.4f}", val_str, f"{lr_now:.3e}", f"{gn:.3f}", f"{elapsed:.1f}", seen]
+                )
                 log_file.flush()
                 print(
                     f"step {step:6d}  train {train_loss:.4f}"
                     + (f"  val {val_str}" if val_str else "")
-                    + f"  {elapsed:7.1f}s"
+                    + f"  lr {lr_now:.2e}  gnorm {gn:6.3f}  {elapsed:7.1f}s"
                 )
-            if do_save:
-                save_checkpoint(model, optimizer, step, Path(run_dir) / f"ckpt_{step}.pt", ckpt_config)
-            optimizer.zero_grad()  # gradients accumulate: clear first
-            loss.backward()
-            optimizer.step()
 
         # ------------------------------------------------------------ 5. end
         val_loss = evaluate(model, val_batch_list)
         elapsed = time.perf_counter() - start
         seen = max_steps * tokens_per_step
-        writer.writerow([max_steps, "", f"{val_loss:.4f}", optimizer.param_groups[0]["lr"], f"{elapsed:.1f}", seen])
+        writer.writerow([max_steps, "", f"{val_loss:.4f}", "", "", f"{elapsed:.1f}", seen])
+        save_checkpoint(model, optimizer, max_steps, run_path / f"ckpt_{max_steps}.pt", ckpt_config)
     finally:
         log_file.close()  # closed even if training crashes
 
-    summary = {
+    print(
+        f"done: {max_steps} steps in {elapsed:.1f}s, {seen:,} tokens, "
+        f"last train {train_loss:.4f}, final val {val_loss:.4f}"
+    )
+    return {
         "steps": max_steps,
         "elapsed_s": elapsed,
         "tokens_seen": seen,
@@ -165,9 +245,3 @@ def train(
         "final_val_loss": val_loss,
         "params": n_params,
     }
-    save_checkpoint(model, optimizer, max_steps, Path(run_dir) / f"ckpt_{max_steps}.pt", ckpt_config)
-    print(
-        f"done: {max_steps} steps in {elapsed:.1f}s, {seen:,} tokens, "
-        f"last train {train_loss:.4f}, final val {val_loss:.4f}"
-    )
-    return summary

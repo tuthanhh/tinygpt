@@ -8,6 +8,8 @@ import numpy.typing as npt
 from tinygpt.checkpoint import load_checkpoint, save_checkpoint
 from tinygpt.data import get_batch
 from tinygpt.losses import cross_entropy
+from tinygpt.optim import AdamW, gradient_clipping, learning_rate_schedule
+from tinygpt.tokenizer.bpe import BpeTokenizer, train_bpe
 import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
@@ -521,14 +523,14 @@ def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm:
 
     The gradients of the parameters (parameter.grad) should be modified in-place.
     """
-    raise NotImplementedError
+    gradient_clipping(parameters, max_l2_norm)
 
 
 def get_adamw_cls() -> Any:
     """
     Returns a torch.optim.Optimizer that implements AdamW.
     """
-    raise NotImplementedError
+    return AdamW
 
 
 def run_get_lr_cosine_schedule(
@@ -556,7 +558,7 @@ def run_get_lr_cosine_schedule(
     Returns:
         Learning rate at the given iteration under the specified schedule.
     """
-    raise NotImplementedError
+    return learning_rate_schedule(it, max_learning_rate, min_learning_rate, warmup_iters, cosine_cycle_iters)
 
 
 def run_save_checkpoint(
@@ -619,7 +621,7 @@ def get_tokenizer(
     Returns:
         A BPE tokenizer that uses the provided vocab, merges, and special tokens.
     """
-    raise NotImplementedError
+    return BpeTokenizer(vocab, merges, special_tokens)
 
 
 def run_train_bpe(
@@ -649,4 +651,4 @@ def run_train_bpe(
                 representing that <token1> was merged with <token2>.
                 Merges are ordered by order of creation.
     """
-    raise NotImplementedError
+    return train_bpe(input_path, vocab_size, special_tokens)

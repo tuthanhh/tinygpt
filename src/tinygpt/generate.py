@@ -3,6 +3,7 @@ from collections.abc import Iterator
 import torch.nn as nn
 import torch
 
+
 def sample_next(
     logits: torch.Tensor,
     temperature: float,
@@ -35,7 +36,7 @@ def sample_next(
 
 @torch.no_grad
 def generate(
-    model:nn.Module,
+    model: nn.Module,
     prompt_ids: list[int],
     *,
     max_new_tokens: int,

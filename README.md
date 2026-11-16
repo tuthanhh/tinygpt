@@ -9,7 +9,9 @@ affiliated with Stanford.
 
 ## What's inside
 
-- **Data**: Vietnamese poetry (`data/vietnamese_poetry/`, ~85 MB of accented training text) for the main runs;
+- **Data**: Vietnamese poetry
+  ([bigscience-data/roots_vi_vietnamese_poetry](https://huggingface.co/datasets/bigscience-data/roots_vi_vietnamese_poetry),
+  in `data/vietnamese_poetry/`, ~85 MB of accented training text) for the main runs;
   [hchautran/vietnamese-wiki](https://huggingface.co/datasets/hchautran/vietnamese-wiki) is also supported. The last
   ~5% of documents are held out for validation. The dataset is chosen per run in its config.
 
@@ -50,6 +52,13 @@ uv run python scripts/prepare_vi.py data/vi_raw/*.parquet --text-column <text co
 
 This writes `data/vi_train.txt` and `data/vi_valid.txt` (about 100 MB of training text by default; change with
 `--train-mb`). Add `--strip-accents` to remove Vietnamese diacritics; the output files are then named `vi_noaccent_*`.
+
+For the [poetry dataset](https://huggingface.co/datasets/bigscience-data/roots_vi_vietnamese_poetry), download its
+parquet file into `data/vietnamese_poetry/` and write the text files next to it:
+
+```sh
+uv run python scripts/prepare_vi.py data/vietnamese_poetry/*.parquet --text-column text --out-dir data/vietnamese_poetry
+```
 
 ## Training
 

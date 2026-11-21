@@ -82,8 +82,8 @@ uv run python scripts/generate.py --ckpt runs/vi_poetry/ckpt_<step>.pt --seed 0
 
 ## Training on Colab
 
-`notebooks/colab_train_demo.ipynb` runs the larger configuration (`configs/vi_wiki_colab_l4.json`, about 60M
-parameters, context 512, TF32 matmuls) on a Colab L4 GPU; `configs/vi_wiki_colab.json` is a smaller T4 variant. It uses
+`notebooks/colab_train_demo.ipynb` runs the larger configuration (`configs/vi_wiki_colab_l4.json`, about 33M
+parameters, context 256, TF32 matmuls, sized for about 8 hours) on a Colab L4 GPU; `configs/vi_wiki_colab.json` is a smaller T4 variant. It uses
 the word-segmented Vietnamese Wikipedia
 ([hchautran/vietnamese-wiki-segmented](https://huggingface.co/datasets/hchautran/vietnamese-wiki-segmented): words
 joined by underscores, punctuation removed). The notebook writes about 1 GB of training text to `data/vi_wiki_seg/`

@@ -1,5 +1,5 @@
 {
-  "_note": "Colab L4 (24GB). fp32 code with TF32 matmuls (the notebook sets TORCH_ALLOW_TF32_CUBLAS_OVERRIDE=1). ~60M params, 36k steps x 16k tokens = ~590M tokens (~2 passes over the segmented wiki). Run the notebook's speed test first and adjust max_steps to your time budget.",
+  "_note": "Colab L4 (24GB). fp32 code with TF32 matmuls (the notebook sets TORCH_ALLOW_TF32_CUBLAS_OVERRIDE=1). ~60M params, 72k steps x 8k tokens = ~590M tokens (batch 32 ran out of memory: naive attention stores several B x H x 512 x 512 copies per layer) (~2 passes over the segmented wiki). Run the notebook's speed test first and adjust max_steps to your time budget.",
   "_next": "Once bf16 autocast exists in train(): d_model 768, num_layers 12, num_heads 12, d_ff 2048 (~95M), max_lr 6e-4, ~1B tokens.",
   "_data": "The notebook overrides train_path / val_path / tokenizer_spec from its settings (SEG_MODE, WHOLE_WORD_BPE, BPE_VOCAB).",
 
@@ -16,21 +16,21 @@
   "d_ff": 1728,
   "rope_theta": 10000.0,
 
-  "batch_size": 32,
-  "max_steps": 36000,
+  "batch_size": 16,
+  "max_steps": 72000,
   "optimizer_name": "adamw",
-  "max_lr": 8e-4,
-  "min_lr": 8e-5,
-  "warmup_iters": 1000,
+  "max_lr": 6e-4,
+  "min_lr": 6e-5,
+  "warmup_iters": 2000,
   "cosine_cycle_iters": null,
   "betas": [0.9, 0.95],
   "weight_decay": 0.1,
   "max_grad_norm": 1.0,
 
   "log_every": 100,
-  "eval_every": 2000,
-  "eval_batches": 40,
-  "ckpt_every": 6000,
+  "eval_every": 4000,
+  "eval_batches": 80,
+  "ckpt_every": 12000,
 
   "seed": 0,
   "overfit_one_batch": false

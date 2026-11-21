@@ -3,11 +3,15 @@ documents separated by <|endoftext|>.
 
     uv run python scripts/prepare_vi.py data/vi_raw/*.parquet --text-column story
     uv run python scripts/prepare_vi.py data/vi_raw/*.parquet --text-column story --strip-accents
+
+Word-segmented corpora (hchautran/vietnamese-wiki-segmented: "tổ_chức quốc_tế"):
+    uv run python scripts/prepare_vi.py seg/*.parquet --text-column segmented_text --segmented keep
 """
 
 import argparse
 import json
 import random
+import re
 import unicodedata
 from collections.abc import Iterator
 from pathlib import Path
@@ -45,10 +49,33 @@ def strip_accents(text: str) -> str:
     return no_marks.replace("đ", "d").replace("Đ", "D")  # đ is its own letter, not d + mark
 
 
-def clean(text: str, min_chars: int, no_accents: bool) -> str | None:
+BULLET = re.compile(r"\bBULLET\b")
+# "_" kept only BETWEEN two letters. [^\W\d_] = a letter (word char minus digits and "_").
+# Removes template leftovers ("_ _ NOEDITSECTION _ _"), edge underscores ("_abc", "abc_"),
+# runs ("a__b") and digit joins ("năm_2020" -> "năm 2020": digits are never joined).
+STRAY_UNDERSCORE = re.compile(r"(?<![^\W\d_])_|_(?![^\W\d_])")
+SPACES = re.compile(r"[ \t]+")
+
+
+def clean_segmented(text: str, join_words: bool) -> str:
+    """Segmented wiki: multi-syllable words joined by "_", punctuation already stripped,
+    list items marked by the literal word BULLET. BULLET becomes a line break; with
+    join_words, "tổ_chức" becomes "tổ chức" (plain Vietnamese, still unpunctuated).
+    After this, every remaining "_" sits between two letters."""
+    text = BULLET.sub("\n", text)
+    text = STRAY_UNDERSCORE.sub(" ", text)
+    if join_words:
+        text = text.replace("_", " ")
+    text = SPACES.sub(" ", text)
+    return "\n".join(line.strip() for line in text.split("\n") if line.strip())
+
+
+def clean(text: str, min_chars: int, no_accents: bool, segmented: str | None = None) -> str | None:
     """Cleaned document, or None if it should be dropped."""
     text = unicodedata.normalize("NFC", text)  # one byte form per accented letter
     text = text.replace(EOT, " ")  # a stray separator would split the document
+    if segmented is not None:
+        text = clean_segmented(text, join_words=segmented == "join")
     text = text.strip()
     if no_accents:
         text = strip_accents(text)
@@ -73,6 +100,12 @@ def main() -> None:
     p.add_argument("--valid-frac", type=float, default=0.05)
     p.add_argument("--min-chars", type=int, default=50)
     p.add_argument("--strip-accents", action="store_true")
+    p.add_argument(
+        "--segmented",
+        choices=["keep", "join"],
+        default=None,
+        help="input is word-segmented with '_': keep the underscores, or join them back into spaces",
+    )
     args = p.parse_args()
 
     name = args.name or ("vi_noaccent" if args.strip_accents else "vi")
@@ -87,7 +120,7 @@ def main() -> None:
     seen = dropped = 0
     for raw in iter_documents(args.inputs, args.text_column):
         seen += 1
-        doc = clean(raw, args.min_chars, args.strip_accents)
+        doc = clean(raw, args.min_chars, args.strip_accents, args.segmented)
         if doc is None:
             dropped += 1
             continue

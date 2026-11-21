@@ -80,6 +80,25 @@ Generate from a checkpoint, interactively or once with `--prompt`:
 uv run python scripts/generate.py --ckpt runs/vi_poetry/ckpt_<step>.pt --seed 0
 ```
 
+## Training on Colab
+
+`notebooks/colab_train_demo.ipynb` runs the larger configuration (`configs/vi_wiki_colab_l4.json`, about 60M
+parameters, context 512, TF32 matmuls) on a Colab L4 GPU; `configs/vi_wiki_colab.json` is a smaller T4 variant. It uses
+the word-segmented Vietnamese Wikipedia
+([hchautran/vietnamese-wiki-segmented](https://huggingface.co/datasets/hchautran/vietnamese-wiki-segmented): words
+joined by underscores, punctuation removed). The notebook writes about 1 GB of training text to `data/vi_wiki_seg/`
+(`prepare_vi.py --segmented keep`, or `join` to turn underscores back into spaces), trains an 8192-token BPE tokenizer
+on a 100 MB sample (`train_bpe.py --pattern words` keeps underscore-joined words as one pre-token; the pattern is saved
+in the tokenizer's `meta.json`), tokenizes the text, runs a 200-step speed test, trains, plots the loss curves, and serves a Gradio
+demo. The tokenizer, token cache, and run folders are kept on Google Drive so they survive disconnects.
+
+To tokenize locally instead of on Colab, run the command below and upload the two `.npy` files from `data/cache/` to
+`MyDrive/tinygpt/cache/` (and the tokenizer folder to `MyDrive/tinygpt/tokenizers/`):
+
+```sh
+uv run python scripts/tokenize_data.py configs/vi_wiki_colab.json
+```
+
 ## Acknowledgements
 
 The tests, adapter interface, and model specification come from the

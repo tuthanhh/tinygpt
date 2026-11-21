@@ -12,6 +12,10 @@ import regex as re
 BYTE_TOKENS = tuple(bytes([i]) for i in range(256))
 # This pattern is tuned to English, splitting out contractions, words, numbers, and others
 PRETOKEN_PATTERN = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+# Same, except letters joined by "_" stay one pre-token, for word-segmented text
+# ("tổ_chức quốc_tế" -> "tổ_chức", " quốc_tế"), so BPE can learn whole words.
+# Only letters join: "abc_123" -> "abc", "_", "123"; a stray "_" falls to the symbol branch.
+WORD_PRETOKEN_PATTERN = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+(?:_\p{L}+)*| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
 
 def build_delim_regex(special_tokens: list[bytes]) -> bytes:
@@ -82,6 +86,7 @@ def count_pretoken(
     start: int,
     end: int,
     special_tokens: list[bytes],
+    pattern: str = PRETOKEN_PATTERN,
 ) -> Counter[bytes]:
     """
     Split the chunks [start, end) of the corpus into pretokens and count them.
@@ -92,6 +97,8 @@ def count_pretoken(
         end (int): Index of the one-past-end bytes of the chunk.
         special_tokens (list[bytes]): A list of string special tokens.
             These strings act as boundary for pretokens, and are not counted as pretokens themselves.
+        pattern (str): Pre-token regex. Passed explicitly (not read from a global) because
+            this runs in worker processes.
 
     Returns:
         Counter[bytes]: a dictionary of pretokens and their corresponding count.
@@ -109,7 +116,7 @@ def count_pretoken(
 
     count = Counter[bytes]()
     for sample in samples:
-        for match in re.finditer(PRETOKEN_PATTERN, sample.decode(errors="ignore")):
+        for match in re.finditer(pattern, sample.decode(errors="ignore")):
             count[match.group().encode()] += 1
 
     return count
@@ -118,6 +125,7 @@ def count_pretoken(
 def pretokenize_file(
     input_path: str | os.PathLike,
     special_tokens: list[str],
+    pattern: str = PRETOKEN_PATTERN,
 ) -> list[tuple[tuple[bytes, ...], int]]:
     """
     Given the path to an input corpus, split the corpus into pretokens and count them.
@@ -126,6 +134,7 @@ def pretokenize_file(
         input_path (str | os.PathLike): Path to tokenizer training data.
         special_tokens (list[str]): A list of string special tokens.
             These strings act as boundary for pretokens, and are not counted as pretokens themselves.
+        pattern (str): Pre-token regex (default: GPT-2 style PRETOKEN_PATTERN).
 
     Returns:
         list[tuple[tuple[bytes, ...], int]]:
@@ -147,7 +156,7 @@ def pretokenize_file(
         pretoken_counts = pool.starmap(
             count_pretoken,
             [
-                (input_path, start, end, special_tokens_bytes)
+                (input_path, start, end, special_tokens_bytes, pattern)
                 for start, end in zip(chunk_boundaries[:-1], chunk_boundaries[1:])
             ],
         )
@@ -195,6 +204,7 @@ def train_bpe(
     input_path: str | os.PathLike,
     vocab_size: int,
     special_tokens: list[str],
+    pattern: str = PRETOKEN_PATTERN,
 ) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
     """
     Given the path to an input corpus, train a BPE tokenizer and output its vocabulary and merges.
@@ -204,6 +214,7 @@ def train_bpe(
         vocab_size (int): Total number of items in the tokenizer's vocabulary (including special tokens).
         special_tokens (list[str]): A list of string special tokens to be added to the tokenizer vocabulary.
             These strings will never be split into multiple tokens, and will always be kept as a single token.
+        pattern (str): Pre-token regex. Encoding must use the same one (BpeTokenizer(pattern=...)).
 
     Returns:
         tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
@@ -215,7 +226,7 @@ def train_bpe(
                 Merges are ordered by order of creation.
     """
 
-    pretokens = pretokenize_file(input_path, special_tokens)
+    pretokens = pretokenize_file(input_path, special_tokens, pattern)
     pair_count, pair_pretoken_indices = index_byte_pairs(pretokens)
 
     vocab = {byte: BYTE_TOKENS[byte] for byte in range(256)}

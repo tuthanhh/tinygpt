@@ -7,7 +7,8 @@ import regex  # not `re`: the pattern needs \p{L} / \p{N} Unicode classes
 from tinygpt.tokenizer.bpe.train_bpe import PRETOKEN_PATTERN
 from tinygpt.tokenizer.byte import EOT_TOKEN
 
-# Same pattern training used: encoding must split text exactly as training did.
+# Default pattern (GPT-2 style). A tokenizer trained with another pattern must be built
+# with that same pattern: encoding must split text exactly as training did.
 PAT = regex.compile(PRETOKEN_PATTERN)
 
 
@@ -21,8 +22,11 @@ class BpeTokenizer:
         vocab: dict[int, bytes],
         merges: list[tuple[bytes, bytes]],
         special_tokens: list[str] | None = None,
+        pattern: str | None = None,
     ) -> None:
         self.vocab = dict(vocab)
+        self.pattern = pattern or PRETOKEN_PATTERN
+        self._pat = PAT if pattern is None else regex.compile(pattern)
         self.special_tokens = list(special_tokens or [])
 
         # Special tokens must have IDs; add any the vocab is missing.
@@ -58,14 +62,15 @@ class BpeTokenizer:
         vocab_filepath: str | Path,
         merges_filepath: str | Path,
         special_tokens: list[str] | None = None,
+        pattern: str | None = None,
     ) -> "BpeTokenizer":
         """Load the pickles scripts/train_bpe.py writes. Prefer tinygpt.tokenizer.load_tokenizer,
-        which also sets the name and checks for the separator token."""
+        which also sets the name, restores the pattern, and checks for the separator token."""
         with open(vocab_filepath, "rb") as f:
             vocab = pickle.load(f)
         with open(merges_filepath, "rb") as f:
             merges = pickle.load(f)
-        return cls(vocab, merges, special_tokens)
+        return cls(vocab, merges, special_tokens, pattern)
 
     # ------------------------------------------------------------ encoding
     def _merge_pretoken(self, pretoken: str) -> list[int]:
@@ -111,7 +116,7 @@ class BpeTokenizer:
             if chunk in specials:
                 ids.append(self.token_to_id[chunk.encode("utf-8")])
                 continue
-            for m in PAT.finditer(chunk):
+            for m in self._pat.finditer(chunk):
                 ids.extend(self._merge_pretoken(m.group()))
         return ids
 

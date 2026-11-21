@@ -21,7 +21,12 @@ def load_tokenizer(spec: str) -> ByteTokenizer | BpeTokenizer:
     meta_path = folder / "meta.json"
     meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
 
-    tok = BpeTokenizer.from_files(folder / "vocab.pkl", folder / "merges.pkl", meta.get("special_tokens", [EOT_TOKEN]))
+    # A custom pre-token pattern is saved by scripts/train_bpe.py --pattern; encoding must
+    # split text exactly as training did. Older folders have none: the GPT-2 default applies.
+    pattern_kw = {"pattern": meta["pattern"]} if meta.get("pattern") else {}
+    tok = BpeTokenizer.from_files(
+        folder / "vocab.pkl", folder / "merges.pkl", meta.get("special_tokens", [EOT_TOKEN]), **pattern_kw
+    )
     # The name keys the token cache in load_tokens: it must differ between tokenizers.
     tok.name = meta.get("name", folder.name)
     # Not checked inside BpeTokenizer: the handout tests build it without special tokens.

@@ -1,5 +1,5 @@
 {
-  "_note": "Colab L4, sized to fill ~84% of its 22.5GB (memory is the constraint, not time). ~181M params, context 256, batch 32 (8k tokens/step). Measured at 12 layers: 1.09 s/step, peak 17.4GB; each layer adds ~1.4GB, so 13 layers = ~18.8GB, ~1.18 s/step. 36k steps = ~12h, ~295M tokens (~1.35 passes). No resume: keep the run inside one Colab session; max_steps = budget_s / s_per_step. Checkpoints are ~2.2GB each (weights + AdamW state).",
+  "_note": "Colab L4, sized to fill ~83% of its 22.5GB (memory is the constraint, not time). ~194M params, context 256, batch 32 (8k tokens/step). Measured: 12 layers 1.09 s/step, 17.4GB; 13 layers 1.17 s/step, 18.0GB (~0.6GB per layer), so 14 layers = ~18.6GB, ~1.26 s/step. 36k steps = ~12.6h (+~15 min evals), ~295M tokens (~1.35 passes). No resume: keep the run inside one Colab session; max_steps = budget_s / s_per_step. Checkpoints are ~2.3GB each (weights + AdamW state).",
   "_prev": "8h-optimal alternative: d_model 512, num_layers 8, num_heads 8, d_ff 1344 (33M), max_lr 1e-3, 85k steps (0.31 s/step measured).",
   "_data": "The notebook overrides train_path / val_path / tokenizer_spec from its settings (SEG_MODE, WHOLE_WORD_BPE, BPE_VOCAB).",
   "train_path": "data/vi_wiki_seg/vi_train.txt",
@@ -9,7 +9,7 @@
   "tokenizer_spec": "data/tokenizers/vi_wiki_seg_words_bpe8192",
   "context_length": 256,
   "d_model": 1024,
-  "num_layers": 13,
+  "num_layers": 14,
   "num_heads": 16,
   "d_ff": 2752,
   "rope_theta": 10000.0,

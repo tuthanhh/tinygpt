@@ -1,6 +1,7 @@
 import csv
 import json
 import math
+import os
 import time
 from datetime import datetime
 from pathlib import Path
@@ -68,6 +69,7 @@ def train(
     eval_batches: int = 20,
     ckpt_every: int = 500,
     run_dir: str = "runs/model",
+    resume_from: str | None = None,  # a ckpt_<step>.pt of this same run: continue at that step
     # reproducibility / debugging
     seed: int = 0,
     eval_seed: int = 1234,
@@ -116,6 +118,33 @@ def train(
     def lr_at(step: int) -> float:
         return learning_rate_schedule(step, max_lr, min_lr, warmup_iters, cosine_cycle_iters)
 
+    # Resume: weights + AdamW moments + step. The lr schedule is a function of the step, so it
+    # continues by itself. ckpt_S is saved BEFORE step S's update: step S is the next to run.
+    start_step = 0
+    if resume_from is not None:
+        ckpt = torch.load(resume_from, map_location="cpu")
+        saved = ckpt.get("config") or {}
+        mismatch = {k: (saved[k], v) for k, v in model_config.items() if k in saved and saved[k] != v}
+        if mismatch:
+            raise ValueError(
+                f"{resume_from} has a different model shape (checkpoint, config): {mismatch}. "
+                "Resume with the checkpoint's own settings."
+            )
+        saved_optim = saved.get("run", {}).get("optim", {})
+        current_optim = {"max_lr": max_lr, "min_lr": min_lr, "warmup_iters": warmup_iters,
+                         "cosine_cycle_iters": cosine_cycle_iters, "max_steps": max_steps, "batch_size": batch_size}
+        changed = {k: (saved_optim[k], v) for k, v in current_optim.items() if k in saved_optim and saved_optim[k] != v}
+        if changed:
+            print(f"!! resuming with changed settings (checkpoint, now): {changed}")
+        model.load_state_dict(ckpt["model"])
+        optimizer.load_state_dict(ckpt["optimizer"])  # moves the moments to the params' device
+        start_step = ckpt["iteration"]
+        del ckpt
+        # A different batch stream from the first segment's: seeding with `seed` again would
+        # replay the batches of steps 0, 1, 2, ... instead of drawing fresh ones.
+        np.random.seed(seed + start_step)
+        print(f"resumed from {resume_from} at step {start_step}")
+
     n_params = sum(p.numel() for p in model.parameters())
     print(
         f"device={device}  params={n_params:,}  optimizer={optimizer_name}  "
@@ -154,6 +183,8 @@ def train(
         "eval_seed": eval_seed,
         "eval_batches": eval_batches,
         "overfit_one_batch": overfit_one_batch,
+        "resumed_from": str(resume_from) if resume_from is not None else None,
+        "resumed_at_step": start_step,
     }
     # Model keys stay top-level so the CLI can still build TransformerLM(**config)
     # after popping "tokenizer" and "run".
@@ -165,23 +196,42 @@ def train(
     run_path.mkdir(parents=True, exist_ok=True)
     with open(run_path / "config.json", "w", encoding="utf-8") as f:
         json.dump(ckpt_config, f, indent=2)  # same dict as every checkpoint carries
-    log_file = open(run_path / "train_log.csv", "w", newline="")
+    header = ["step", "train_loss", "val_loss", "lr", "grad_norm", "elapsed_s", "tokens_seen"]
+    log_path = run_path / "train_log.csv"
+    # On resume, keep the log of the steps before start_step: rows from start_step on (up to
+    # wherever the first segment died) are about to be redone, and would appear twice.
+    kept_rows: list[list[str]] = []
+    if start_step > 0 and log_path.exists():
+        with open(log_path, newline="") as f:
+            kept_rows = [row for row in csv.reader(f) if row and row[0].isdigit() and int(row[0]) < start_step]
+    elapsed_offset = float(kept_rows[-1][5]) if kept_rows else 0.0  # time axis continues
+    log_file = open(log_path, "w", newline="")
     writer = csv.writer(log_file)
-    writer.writerow(["step", "train_loss", "val_loss", "lr", "grad_norm", "elapsed_s", "tokens_seen"])
+    writer.writerow(header)
+    writer.writerows(kept_rows)
+    log_file.flush()
 
     tokens_per_step = batch_size * context_length
-    start = time.perf_counter()
+    start = time.perf_counter() - elapsed_offset
     train_loss = float("nan")
     val_loss = float("nan")
-    elapsed = 0.0
-    seen = 0
+    elapsed = elapsed_offset
+    seen = start_step * tokens_per_step
 
     # ---------------------------------------------------------------- 2. loop
     # Everything logged for `step` describes the weights after `step` updates:
     # val loss, train loss (forward pass before this step's update), and the lr
     # and grad norm used for this step's update.
+    def save(step: int) -> None:
+        # Write a temp file, then rename: a session killed mid-save (a ~2GB file to Drive) leaves
+        # the previous checkpoints intact instead of a truncated ckpt that resume would pick.
+        final = run_path / f"ckpt_{step}.pt"
+        tmp = final.with_suffix(".pt.tmp")
+        save_checkpoint(model, optimizer, step, tmp, ckpt_config)
+        os.replace(tmp, final)
+
     try:
-        for step in range(max_steps):
+        for step in range(start_step, max_steps):
             # lr for THIS step, set before anything reads it, on every param group.
             lr_now = lr_at(step)
             for group in optimizer.param_groups:
@@ -189,12 +239,13 @@ def train(
 
             do_log = step % log_every == 0
             do_eval = step % eval_every == 0
-            do_save = step > 0 and step % ckpt_every == 0  # step 0 = untrained, not worth a file
+            # Not at step 0 (untrained) nor at start_step (that checkpoint is where we resumed from).
+            do_save = step > start_step and step % ckpt_every == 0
 
             if do_eval:
                 val_loss = evaluate(model, val_batch_list)
             if do_save:
-                save_checkpoint(model, optimizer, step, run_path / f"ckpt_{step}.pt", ckpt_config)
+                save(step)
 
             x, y = (
                 fixed_batch if fixed_batch is not None else get_batch(train_tokens, batch_size, context_length, device)
@@ -229,12 +280,12 @@ def train(
         elapsed = time.perf_counter() - start
         seen = max_steps * tokens_per_step
         writer.writerow([max_steps, "", f"{val_loss:.4f}", "", "", f"{elapsed:.1f}", seen])
-        save_checkpoint(model, optimizer, max_steps, run_path / f"ckpt_{max_steps}.pt", ckpt_config)
+        save(max_steps)
     finally:
         log_file.close()  # closed even if training crashes
 
     print(
-        f"done: {max_steps} steps in {elapsed:.1f}s, {seen:,} tokens, "
+        f"done: {max_steps - start_step} steps (to step {max_steps}) in {elapsed:.1f}s, {seen:,} tokens, "
         f"last train {train_loss:.4f}, final val {val_loss:.4f}"
     )
     return {

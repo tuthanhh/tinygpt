@@ -82,7 +82,7 @@ uv run python scripts/generate.py --ckpt runs/vi_poetry/ckpt_<step>.pt --seed 0
 
 ## Training on Colab
 
-`notebooks/colab_train_demo.ipynb` runs the larger configuration (`configs/vi_wiki_colab_l4.json`, about 194M
+`notebooks/colab_train_demo.ipynb` runs the larger configuration (`configs/vi_wiki_colab_l4.json`, about 181M
 parameters, context 256, TF32 matmuls, sized to fill about 80% of the GPU's memory) on a Colab L4 GPU; `configs/vi_wiki_colab.json` is a smaller T4 variant. It uses
 the word-segmented Vietnamese Wikipedia
 ([hchautran/vietnamese-wiki-segmented](https://huggingface.co/datasets/hchautran/vietnamese-wiki-segmented): words
@@ -91,6 +91,11 @@ joined by underscores, punctuation removed). The notebook writes about 1 GB of t
 on a 100 MB sample (`train_bpe.py --pattern words` keeps underscore-joined words as one pre-token; the pattern is saved
 in the tokenizer's `meta.json`), tokenizes the text, runs a 200-step speed test, trains, plots the loss curves, and serves a Gradio
 demo. The tokenizer, token cache, and run folders are kept on Google Drive so they survive disconnects.
+
+A run continues after a disconnect: `scripts/train.py --resume latest` (or a checkpoint path) loads the newest
+`ckpt_*.pt` in the run folder, restoring the weights, the AdamW state and the step; the learning rate schedule follows
+from the step. The config must describe the same run (a different model shape is an error), and the log keeps its rows
+from before the checkpoint.
 
 To tokenize locally instead of on Colab, run the command below and upload the two `.npy` files from `data/cache/` to
 `MyDrive/tinygpt/cache/` (and the tokenizer folder to `MyDrive/tinygpt/tokenizers/`):
